@@ -116,3 +116,13 @@ func (w *WAL) rotateLogIfSizeExceeds() error {
 	}
 	return nil
 }
+
+func (w *WAL) Sync() error {
+	return w.currentLog.Sync()
+}
+
+func (w *WAL) Close() error {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+	return w.Sync()
+}
