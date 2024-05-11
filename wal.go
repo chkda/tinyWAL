@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -15,21 +16,19 @@ const (
 )
 
 type Config struct {
-	LogDir      string
-	SegmentSize int64
-	UseFSync    bool
-	MaxSegments int
-	BatchSize   int
+	LogDir         string
+	SegmentSize    int64
+	MaxSegments    int
+	SyncTimePeriod time.Duration
 }
 
 type WAL struct {
-	logDir      string
-	currentLog  *os.File
-	enableFSync bool
-	maxSegments int
-	segmentSize int64
-	batchSize   int
-	lock        sync.Mutex
+	logDir         string
+	currentLog     *os.File
+	maxSegments    int
+	segmentSize    int64
+	lock           sync.Mutex
+	syncTimeTicker *time.Ticker
 }
 
 func New(config *Config) (*WAL, error) {
@@ -38,16 +37,16 @@ func New(config *Config) (*WAL, error) {
 		return nil, err
 	}
 	wal := &WAL{
-		logDir:      config.LogDir,
-		enableFSync: config.UseFSync,
-		maxSegments: config.MaxSegments,
-		segmentSize: config.SegmentSize,
-		batchSize:   config.BatchSize,
+		logDir:         config.LogDir,
+		maxSegments:    config.MaxSegments,
+		segmentSize:    config.SegmentSize,
+		syncTimeTicker: time.NewTicker(config.SyncTimePeriod),
 	}
 	err = wal.createNewLogFile()
 	if err != nil {
 		return nil, err
 	}
+	go wal.syncInBackground()
 	return wal, nil
 }
 
@@ -115,6 +114,20 @@ func (w *WAL) rotateLogIfSizeExceeds() error {
 		w.createNewLogFile()
 	}
 	return nil
+}
+
+func (w *WAL) syncInBackground() {
+	for {
+		select {
+		case <-w.syncTimeTicker.C:
+			w.lock.Lock()
+			err := w.Sync()
+			w.lock.Unlock()
+			if err != nil {
+				log.Println(err)
+			}
+		}
+	}
 }
 
 func (w *WAL) Sync() error {
