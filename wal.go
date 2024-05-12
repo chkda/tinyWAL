@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,6 +31,11 @@ type WAL struct {
 	segmentSize    int64
 	lock           sync.Mutex
 	syncTimeTicker *time.Ticker
+}
+
+type segmentInfo struct {
+	Name      string
+	Timestamp int64
 }
 
 func New(config *Config) (*WAL, error) {
@@ -105,6 +112,14 @@ func (w *WAL) Write(data []byte) error {
 }
 
 func (w *WAL) rotateLogIfSizeExceeds() error {
+	files, err := w.getAllSegments()
+	if err != nil {
+		return err
+	}
+	err = w.processOldSegments(files)
+	if err != nil {
+		return err
+	}
 	fileInfo, err := w.currentLog.Stat()
 	if err != nil {
 		return err
@@ -138,4 +153,72 @@ func (w *WAL) Close() error {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	return w.Sync()
+}
+
+func (w *WAL) getAllSegments() ([]string, error) {
+	entries, err := os.ReadDir(w.logDir)
+	if err != nil {
+		return nil, err
+	}
+	fileNames := make([]string, 0, 5)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fileNames = append(fileNames, entry.Name())
+	}
+
+	return fileNames, nil
+}
+
+func (w *WAL) processOldSegments(segments []string) error {
+	if len(segments) < w.maxSegments {
+		return nil
+	}
+	err := w.deleteOldSegments(segments)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *WAL) deleteOldSegments(segments []string) error {
+	segmentsWithInfo, err := w.getSegmentInfos(segments)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(segmentsWithInfo, func(i, j int) bool {
+		return segmentsWithInfo[i].Timestamp < segmentsWithInfo[j].Timestamp
+	})
+	count := len(segments)
+	for _, segment := range segmentsWithInfo {
+		if count < w.maxSegments {
+			break
+		}
+		err := os.Remove(w.logDir + "/" + segment.Name)
+		if err != nil {
+			return err
+		}
+		count -= 1
+	}
+	return nil
+}
+
+func (w *WAL) getSegmentInfos(segments []string) ([]*segmentInfo, error) {
+	segmentsWithInfo := make([]*segmentInfo, 0, 5)
+	for _, segment := range segments {
+		if !strings.HasPrefix(segment, filePrefix) {
+			continue
+		}
+		timestampStr := strings.ReplaceAll(segment, filePrefix, "")
+		timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		segmentsWithInfo = append(segmentsWithInfo, &segmentInfo{
+			Name:      segment,
+			Timestamp: timestamp,
+		})
+	}
+	return segmentsWithInfo, nil
 }
