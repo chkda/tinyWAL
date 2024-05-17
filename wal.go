@@ -1,7 +1,9 @@
 package tinywal
 
 import (
+	"bufio"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
 	"log"
@@ -15,6 +17,11 @@ import (
 
 const (
 	filePrefix = "segment-"
+)
+
+var (
+	ErrBytesLength        = errors.New("line less than expected")
+	ErrChecksumValidation = errors.New("checksum mismatch")
 )
 
 type Config struct {
@@ -221,4 +228,57 @@ func (w *WAL) getSegmentInfos(segments []string) ([]*segmentInfo, error) {
 		})
 	}
 	return segmentsWithInfo, nil
+}
+
+func (w *WAL) Recover(callback func([]byte) error) error {
+	segments, err := w.getAllSegments()
+	if err != nil {
+		return err
+	}
+	segmentsWithInfo, err := w.getSegmentInfos(segments)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(segmentsWithInfo, func(i, j int) bool {
+		return segmentsWithInfo[i].Timestamp < segmentsWithInfo[j].Timestamp
+	})
+	for _, segmentWithInfo := range segmentsWithInfo {
+		segmentPath := w.logDir + "/" + segmentWithInfo.Name
+		err = w.recoverSegment(segmentPath, callback)
+		if err != nil {
+			continue
+		}
+	}
+	return nil
+}
+
+func (w *WAL) recoverSegment(segmentPath string, callback func([]byte) error) error {
+	segment, err := os.Open(segmentPath)
+	if err != nil {
+		return err
+	}
+	defer segment.Close()
+	scanner := bufio.NewScanner(segment)
+	for scanner.Scan() {
+		info := scanner.Bytes()
+
+		if len(info) < 12 {
+			return ErrBytesLength
+		}
+
+		data := info[12 : len(info)-4]
+		checksumBytes := info[len(info)-4:]
+
+		precomputedChecksum := binary.LittleEndian.Uint32(checksumBytes)
+		calculatedChecksum := crc32.ChecksumIEEE(data)
+
+		if precomputedChecksum != calculatedChecksum {
+			return ErrChecksumValidation
+		}
+		err = callback(data)
+		if err != nil {
+			break
+		}
+	}
+	return nil
 }
