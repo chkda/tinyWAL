@@ -106,15 +106,16 @@ func (w *WAL) Write(data []byte) error {
 		return err
 	}
 
+	_, err = w.currentLog.Write(checksumBytes)
+	if err != nil {
+		return err
+	}
+
 	_, err = w.currentLog.Write(data)
 	if err != nil {
 		return err
 	}
 
-	_, err = w.currentLog.Write(checksumBytes)
-	if err != nil {
-		return err
-	}
 	if _, err := w.currentLog.Write([]byte("\n")); err != nil {
 		return err
 	}
@@ -270,8 +271,8 @@ func (w *WAL) recoverSegment(segmentPath string, callback func([]byte) error) er
 			continue
 		}
 
-		data := info[12 : len(info)-4]
-		checksumBytes := info[len(info)-4:]
+		checksumBytes := info[12:16]
+		data := info[16:]
 
 		precomputedChecksum := binary.LittleEndian.Uint32(checksumBytes)
 		calculatedChecksum := crc32.ChecksumIEEE(data)
