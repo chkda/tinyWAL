@@ -115,6 +115,10 @@ func (w *WAL) Write(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if _, err := w.currentLog.Write([]byte("\n")); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -199,7 +203,7 @@ func (w *WAL) deleteOldSegments(segments []string) error {
 	})
 	count := len(segments)
 	for _, segment := range segmentsWithInfo {
-		if count < w.maxSegments {
+		if count <= w.maxSegments {
 			break
 		}
 		err := os.Remove(w.logDir + "/" + segment.Name)
@@ -246,7 +250,7 @@ func (w *WAL) Recover(callback func([]byte) error) error {
 		segmentPath := w.logDir + "/" + segmentWithInfo.Name
 		err = w.recoverSegment(segmentPath, callback)
 		if err != nil {
-			continue
+			return err
 		}
 	}
 	return nil
@@ -261,9 +265,9 @@ func (w *WAL) recoverSegment(segmentPath string, callback func([]byte) error) er
 	scanner := bufio.NewScanner(segment)
 	for scanner.Scan() {
 		info := scanner.Bytes()
-
-		if len(info) < 12 {
-			return ErrBytesLength
+		if len(info) < 16 {
+			log.Println(ErrBytesLength)
+			continue
 		}
 
 		data := info[12 : len(info)-4]
@@ -273,7 +277,8 @@ func (w *WAL) recoverSegment(segmentPath string, callback func([]byte) error) er
 		calculatedChecksum := crc32.ChecksumIEEE(data)
 
 		if precomputedChecksum != calculatedChecksum {
-			return ErrChecksumValidation
+			log.Println(ErrChecksumValidation)
+			continue
 		}
 		err = callback(data)
 		if err != nil {
