@@ -10,7 +10,7 @@ import (
 func main() {
 	config := &tinywal.Config{
 		LogDir:         "tmp/",
-		MaxSegments:    3,
+		MaxSegments:    30,
 		SegmentSize:    2 * 1024 * 1024, // 2MB
 		SyncTimePeriod: 300 * time.Millisecond,
 	}
@@ -19,7 +19,7 @@ func main() {
 		panic(err)
 	}
 	defer wal.Close()
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 1000000; i++ {
 		err := wal.Write([]byte("SET X 23"))
 		if err != nil {
 			panic(err)

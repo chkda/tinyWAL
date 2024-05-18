@@ -34,10 +34,12 @@ type Config struct {
 type WAL struct {
 	logDir         string
 	currentLog     *os.File
+	bufWriter      *bufio.Writer
 	maxSegments    int
 	segmentSize    int64
 	lock           sync.Mutex
 	syncTimeTicker *time.Ticker
+	currentOffset  int64
 }
 
 type segmentInfo struct {
@@ -72,6 +74,8 @@ func (w *WAL) createNewLogFile() error {
 		return err
 	}
 	w.currentLog = file
+	w.bufWriter = bufio.NewWriter(file)
+	w.currentOffset = 0
 	return nil
 }
 
@@ -82,7 +86,8 @@ func (w *WAL) Write(data []byte) error {
 	if err != nil {
 		return err
 	}
-	offset, err := w.currentLog.Seek(0, io.SeekEnd)
+	_, err = w.currentLog.Seek(0, io.SeekStart)
+	offset := w.currentOffset
 	if err != nil {
 		return err
 	}
@@ -96,30 +101,30 @@ func (w *WAL) Write(data []byte) error {
 	binary.LittleEndian.PutUint32(lenBytes, uint32(len(data)))
 	binary.LittleEndian.PutUint32(checksumBytes, checksum)
 
-	_, err = w.currentLog.Write(offsetBytes)
+	_, err = w.bufWriter.Write(offsetBytes)
 	if err != nil {
 		return err
 	}
 
-	_, err = w.currentLog.Write(lenBytes)
+	_, err = w.bufWriter.Write(lenBytes)
 	if err != nil {
 		return err
 	}
 
-	_, err = w.currentLog.Write(checksumBytes)
+	_, err = w.bufWriter.Write(checksumBytes)
 	if err != nil {
 		return err
 	}
 
-	_, err = w.currentLog.Write(data)
+	_, err = w.bufWriter.Write(data)
 	if err != nil {
 		return err
 	}
 
-	if _, err := w.currentLog.Write([]byte("\n")); err != nil {
+	if _, err := w.bufWriter.Write([]byte("\n")); err != nil {
 		return err
 	}
-
+	w.currentOffset += 1
 	return nil
 }
 
@@ -138,6 +143,7 @@ func (w *WAL) rotateLogIfSizeExceeds() error {
 	}
 	fileSize := fileInfo.Size()
 	if fileSize > w.segmentSize {
+		w.Sync()
 		w.createNewLogFile()
 	}
 	return nil
@@ -158,7 +164,7 @@ func (w *WAL) syncInBackground() {
 }
 
 func (w *WAL) Sync() error {
-	return w.currentLog.Sync()
+	return w.bufWriter.Flush()
 }
 
 func (w *WAL) Close() error {
